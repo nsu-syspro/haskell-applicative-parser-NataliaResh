@@ -20,7 +20,8 @@ module Parser
   , Input
   ) where
 
-import Control.Applicative
+import Control.Applicative ( Alternative(empty, (<|>)) )
+import Data.List (nub)
 
 -- | Value annotated with position of parsed input starting from 0
 data Position a = Position Int a
@@ -46,23 +47,45 @@ newtype Parser a = Parser { runParser :: Input -> Parsed a }
 
 -- | Runs given 'Parser' on given input string
 parse :: Parser a -> String -> Parsed a
-parse = error "TODO: define parse"
+parse pa = runParser pa . Position 0
 
 -- | Runs given 'Parser' on given input string with erasure of @Parsed a@ to @Maybe a@
 parseMaybe :: Parser a -> String -> Maybe a
-parseMaybe = error "TODO: define parseMaybe"
+parseMaybe pa s = case parse pa s of
+  Parsed a _ -> Just a
+  _          -> Nothing
+
+instance Functor Parsed where
+  fmap f (Parsed a i) = Parsed (f a) i
+  fmap _ (Failed xs) = Failed xs
 
 instance Functor Parser where
-  fmap = error "TODO: define fmap (Parser)"
+  fmap :: (a -> b) -> Parser a -> Parser b
+  fmap f (Parser rp) = Parser (fmap f . rp)
 
 instance Applicative Parser where
-  pure = error "TODO: define pure (Parser)"
-  (<*>) = error " TODO: define <*> (Parser)"
+  pure :: a -> Parser a
+  pure a = Parser (Parsed a)
+  (<*>) :: Parser (a -> b) -> Parser a -> Parser b
+  (Parser rf) <*> (Parser rx) = Parser (\i ->
+    case rf i of
+      Parsed f ii -> fmap f (rx ii)
+      Failed xs   -> Failed xs
+    )
 
 instance Alternative Parser where
-  empty = error "TODO: define empty (Parser)"
+  empty :: Parser a
+  empty = Parser (\_ -> Failed [])
   -- Note: when both parsers fail, their errors are accumulated and *deduplicated* to simplify debugging
-  (<|>) = error " TODO: define <|> (Parser)"
+  (<|>) :: Parser a -> Parser a -> Parser a
+  Parser rf <|> Parser rg = Parser (\i ->
+    case rf i of
+      Failed xs   ->
+        case rg i of
+          Parsed g j -> Parsed g j
+          Failed ys  -> Failed $ nub (xs ++ ys)
+      parsed -> parsed
+    )
 
 -- | Parses single character satisfying given predicate
 --
@@ -78,4 +101,10 @@ instance Alternative Parser where
 -- Failed [Position 0 EndOfInput]
 --
 satisfy :: (Char -> Bool) -> Parser Char
-satisfy = error "TODO: define satisfy"
+satisfy f = Parser (\(Position p s) ->
+  case s of
+    [] -> Failed [Position p EndOfInput]
+    (x:xs)
+      | f x       -> Parsed x (Position (p + 1) xs)
+      | otherwise -> Failed [Position p (Unexpected x)]
+    )

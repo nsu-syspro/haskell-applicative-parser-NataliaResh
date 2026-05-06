@@ -3,9 +3,13 @@
 
 module Task3 where
 
-import Parser
-import Data.Char (toLower)
-import Data.List (intercalate)
+import Parser ( Parser, Parsed(..), parse, satisfy )
+import Data.Char (toLower, isDigit, isAscii)
+import Data.List (intercalate, singleton)
+import ParserCombinators ( char, string, choice )
+import Data.Functor ( ($>) )
+import Control.Applicative ( Alternative((<|>), many) )
+import Task2 ( digit, nonZeroDigit )
 
 -- | JSON representation
 --
@@ -27,18 +31,116 @@ data JValue =
 -- Usage example:
 --
 -- >>> parse json "{}"
--- Parsed (JObject []) (Input 2 "")
+-- Parsed (JObject []) (Position 2 "")
 -- >>> parse json "null"
--- Parsed JNull (Input 4 "")
+-- Parsed JNull (Position 4 "")
 -- >>> parse json "true"
--- Parsed (JBool True) (Input 4 "")
+-- Parsed (JBool True) (Position 4 "")
 -- >>> parse json "3.14"
--- Parsed (JNumber 3.14) (Input 4 "")
+-- Parsed (JNumber 3.14) (Position 4 "")
 -- >>> parse json "{{}}"
--- Failed [PosError 0 (Unexpected '{'),PosError 1 (Unexpected '{')]
+-- Failed [Position 0 (Unexpected '{'),Position 1 (Unexpected '{')]
 --
 json :: Parser JValue
-json = error "TODO: define json"
+json = whitespaces *> value <* whitespaces
+  
+value :: Parser JValue
+value = jNull <|> jBool <|> jObject
+        <|> jArray <|> jNumber <|> jString
+
+stringLiteral :: Parser String
+stringLiteral = concat <$> (char '"' *> many jChar <* char '"')
+  where
+    -- >>> parse jChar "\\\""
+    -- Parsed "\\\"" (Position 2 "")
+    jChar :: Parser String
+    jChar =
+      sequenceA [char '\\', choiceChars ['\"', '\\', '/', 'b', 'f', 'n', 'r', 't']]
+      <|> sequenceA [char '\\', char 'u', hexDigit, hexDigit, hexDigit, hexDigit]
+      <|> singleton <$> satisfy (\x -> isAscii x && x /= '"' && x /= '\\')
+
+    hexDigit :: Parser Char
+    hexDigit = satisfy isDigit <|> choiceChars (['a'..'f'] ++ ['A'..'F'])
+
+option :: Parser String -> Parser String
+option = (<|> pure "")
+
+list :: Parser a -> Parser [a]
+list p = ((:) <$> (p <* string ",") <*> list p)
+  <|> singleton <$> p
+
+whitespaces :: Parser String
+whitespaces = 
+  option ((:) <$> choiceChars [' ', '\t', '\n', '\r'] <*> whitespaces)
+
+jObject :: Parser JValue
+jObject = 
+  JObject <$> (char '{' *> members <* char '}')
+  <|> (char '{' *> whitespaces *> char '}' $> JObject [])
+  where
+    member :: Parser (String, JValue)
+    member = (,)
+      <$> (whitespaces *> stringLiteral <* whitespaces)
+      <*> (string ":" *> json)
+
+    members :: Parser [(String, JValue)]
+    members = list member
+
+jArray :: Parser JValue
+jArray = 
+  JArray <$> (char '[' *> elements <* char ']')
+  <|> (char '[' *> whitespaces *> char ']' $> JArray [])
+  where
+    elements :: Parser [JValue]
+    elements = list json
+
+-- >>> parse jString "\"a\\bc\""
+-- Parsed (JString "a\\bc") (Position 6 "")
+jString :: Parser JValue
+jString = JString <$> stringLiteral
+
+choiceChars :: [Char] -> Parser Char
+choiceChars = choice . map char
+
+-- >>> parse jNumber "3.0e14"
+-- Parsed (JNumber 3.0e14) (Position 6 "")
+jNumber :: Parser JValue
+jNumber = JNumber . read <$> (
+  (++) <$> int <*> ((++) <$> option fraction <*> option expon))
+  where
+    int :: Parser String
+    int =
+      ((++) <$> option minus <*> ((:) <$> nonZeroDigit <*> digits))
+      <|> ((++) <$> option minus <*> oneDigit)
+
+    digits :: Parser String
+    digits = 
+      ((:) <$> digit <*> digits)
+      <|> oneDigit
+
+    oneDigit = singleton <$> digit
+
+    fraction :: Parser String
+    fraction = (:) <$> char '.' <*> digits
+
+    expon :: Parser String
+    expon = (:) <$>
+        choiceChars ['e', 'E']
+        <*> ((++) <$> option sign
+        <*> digits)
+
+    minus = string "-"
+
+    sign = minus <|> string "+"
+
+jNull :: Parser JValue
+jNull = string "null" $> JNull
+
+jBool :: Parser JValue
+jBool = choice [
+    string "true"  $> JBool True,
+    string "false" $> JBool False
+  ]
 
 -- * Rendering helpers
 

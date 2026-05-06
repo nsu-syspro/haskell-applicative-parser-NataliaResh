@@ -5,7 +5,7 @@ module ParserCombinators where
 
 import Parser ( Parser, satisfy )
 
-import Control.Applicative ( Alternative(empty, many, (<|>)) )
+import Control.Applicative ( Alternative(many), asum )
 import Control.Monad (void)
 
 -- | Parses single character
@@ -58,7 +58,7 @@ spaces = (void . many . char) ' '
 -- Parsed "ba" (Position 2 "r")
 --
 choice :: (Foldable t, Alternative f) => t (f a) -> f a
-choice = foldr (<|>) empty
+choice = asum
 
 -- Discover and implement more useful parser combinators below
 --
